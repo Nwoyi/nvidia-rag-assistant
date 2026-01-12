@@ -42,7 +42,24 @@ def get_qdrant_client():
 try:
     dense_model, sparse_model, colbert_model = load_models()
     client = get_qdrant_client()
-    ai_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        st.error("❌ OPENAI_API_KEY is missing via .env or secrets.")
+        st.stop()
+
+    # Dynamic Client Configuration
+    if api_key.startswith("nvapi-"):
+        print("💡 Detected NVIDIA API Key. Using NVIDIA NIM...")
+        ai_client = openai.OpenAI(
+            api_key=api_key,
+            base_url="https://integrate.api.nvidia.com/v1"
+        )
+        st.session_state["llm_model"] = "meta/llama-3.1-405b-instruct"
+    else:
+        print("💡 Using Standard OpenAI...")
+        ai_client = openai.OpenAI(api_key=api_key)
+        st.session_state["llm_model"] = "gpt-4o"
+
     collection_name = "nvidia"
 except Exception as e:
     st.error(f"Error initializing models or clients: {e}")
@@ -85,7 +102,7 @@ def generate_answer(query, search_results):
 
     # The Prompt: Telling the AI how to behave
     response = ai_client.chat.completions.create(
-        model="gpt-4o", 
+        model=st.session_state["llm_model"], 
         messages=[
             {
                 "role": "system", 
