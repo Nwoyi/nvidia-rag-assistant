@@ -42,25 +42,67 @@ def get_qdrant_client():
 try:
     dense_model, sparse_model, colbert_model = load_models()
     client = get_qdrant_client()
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        st.error("❌ OPENAI_API_KEY is missing via .env or secrets.")
-        st.stop()
-
-    # Dynamic Client Configuration
-    if api_key.startswith("nvapi-"):
-        print("💡 Detected NVIDIA API Key. Using NVIDIA NIM...")
-        ai_client = openai.OpenAI(
-            api_key=api_key,
-            base_url="https://integrate.api.nvidia.com/v1"
+    # --- Configuration Sidebar ---
+    with st.sidebar:
+        st.header("⚙️ Configuration")
+        
+        # Provider Selection
+        provider = st.radio(
+            "Select AI Provider:",
+            ["Auto-Detect", "NVIDIA NIM", "OpenAI"],
+            index=0,
+            help="Choose 'Auto-Detect' to guess based on API Key prefix."
         )
-        st.session_state["llm_model"] = "meta/llama-3.1-405b-instruct"
-    else:
-        print("💡 Using Standard OpenAI...")
-        ai_client = openai.OpenAI(api_key=api_key)
-        st.session_state["llm_model"] = "gpt-4o"
+        
+        # API Key Management
+        env_key = os.getenv("OPENAI_API_KEY", "")
+        api_key = st.text_input(
+            "API Key (Overrides .env):", 
+            value=env_key, 
+            type="password",
+            help="Enter your NVIDIA (nvapi-...) or OpenAI (sk-...) key."
+        )
 
-    collection_name = "nvidia"
+        if not api_key:
+            st.error("❌ No API Key found provided.")
+            st.stop()
+
+        # Clean key
+        api_key = api_key.strip()
+        
+        # Model Selection
+        if provider == "NVIDIA NIM" or (provider == "Auto-Detect" and api_key.startswith("nvapi-")):
+            active_provider = "NVIDIA"
+            base_url = "https://integrate.api.nvidia.com/v1"
+            default_model = "meta/llama-3.1-405b-instruct"
+        else:
+            active_provider = "OpenAI"
+            base_url = None # Default OpenAI URL
+            default_model = "gpt-4o"
+
+        # Allow model override
+        selected_model = st.text_input("Model Name:", value=default_model)
+        st.session_state["llm_model"] = selected_model
+
+        # Config Info
+        st.success(f"Active Provider: **{active_provider}**")
+        st.caption(f"Base URL: `{base_url or 'Default (OpenAI)'}`")
+        st.caption(f"Key Prefix: `{api_key[:6]}...`")
+
+    # --- Client Initialization ---
+    try:
+        if active_provider == "NVIDIA":
+            ai_client = openai.OpenAI(
+                api_key=api_key,
+                base_url=base_url
+            )
+        else:
+            ai_client = openai.OpenAI(api_key=api_key)
+
+        collection_name = "nvidia"
+    except Exception as e:
+        st.error(f"Failed to initialize AI Client: {e}")
+        st.stop()
 except Exception as e:
     st.error(f"Error initializing models or clients: {e}")
     st.stop()
