@@ -18,6 +18,34 @@ st.set_page_config(
 st.title("🤖 NVIDIA Technical Assistant")
 st.markdown("Ask questions about NVIDIA's corporate profile, hardware, and technical documentation.")
 
+# --- Sidebar: Knowledge Base Viewer ---
+with st.sidebar:
+    st.header("📖 Knowledge Base")
+    st.caption("This is the document the AI uses to answer your questions.")
+    
+    # Load and display the manual
+    try:
+        with open("data/nvidia_manual.md", "r", encoding="utf-8") as f:
+            manual_content = f.read()
+        
+        with st.expander("📄 View NVIDIA Manual", expanded=False):
+            st.markdown(manual_content)
+            
+        st.success(f"✅ Loaded {len(manual_content):,} characters")
+        
+        # Sample questions
+        st.markdown("---")
+        st.subheader("💡 Try asking:")
+        st.markdown("""
+        - *When was NVIDIA founded?*
+        - *What is the H100 GPU?*
+        - *Who is Jensen Huang?*
+        - *What is CUDA?*
+        - *How do I fix GPU overheating?*
+        """)
+    except FileNotFoundError:
+        st.warning("Manual file not found locally (normal on Streamlit Cloud).")
+
 # Initialize Session State
 if "messages" not in st.session_state:
     st.session_state.messages = []
