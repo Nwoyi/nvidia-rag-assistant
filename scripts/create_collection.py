@@ -36,7 +36,7 @@ client.create_collection(
 
 print(f"{collection_name} Created!!!")
 
-with open('nvidia_structured_docs.json', 'r') as f:
+with open('data/nvidia_structured_docs.json', 'r') as f:
     docs = json.load(f)
 
 texts = [doc["chunk_text"] for doc in docs]

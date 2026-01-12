@@ -80,14 +80,14 @@ def enrich_data(simple_json_list):
 
 # --- EXECUTION ---
 # Ensure your file is named 'nvidia_manual.md' or change this string
-input_filename = 'nvidia_manual.md' 
+input_filename = 'data/nvidia_manual.md' 
 json_data = markdown_to_structured_json(input_filename)
 
 if json_data:
     # Enrich the data
     pro_data = enrich_data(json_data)
     
-    output_file = 'nvidia_structured_docs.json'
+    output_file = 'data/nvidia_structured_docs.json'
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(pro_data, f, indent=4)
 
