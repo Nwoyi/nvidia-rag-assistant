@@ -42,79 +42,30 @@ def get_qdrant_client():
 try:
     dense_model, sparse_model, colbert_model = load_models()
     client = get_qdrant_client()
-    # --- Configuration Sidebar ---
-    with st.sidebar:
-        st.header("⚙️ Configuration")
-        
-        # Provider Selection
-        provider = st.radio(
-            "Select AI Provider:",
-            ["Auto-Detect", "NVIDIA NIM", "OpenAI"],
-            index=0,
-            help="Choose 'Auto-Detect' to guess based on API Key prefix."
-        )
-        
-        # API Key Management
-        env_key = os.getenv("OPENAI_API_KEY", "")
-        api_key = st.text_input(
-            "API Key (Overrides .env):", 
-            value=env_key, 
-            type="password",
-            help="Enter your NVIDIA (nvapi-...) or OpenAI (sk-...) key."
-        )
-
-        if not api_key:
-            st.error("❌ No API Key found provided.")
-            st.stop()
-
-        # Clean key
-        api_key = api_key.strip()
-        
-        # Model Selection
-        if provider == "NVIDIA NIM" or (provider == "Auto-Detect" and api_key.startswith("nvapi-")):
-            active_provider = "NVIDIA"
-            base_url = "https://integrate.api.nvidia.com/v1"
-            default_model = "meta/llama-3.1-405b-instruct"
-        else:
-            active_provider = "OpenAI"
-            base_url = None # Default OpenAI URL
-            default_model = "gpt-4o"
-
-        # Allow model override
-        selected_model = st.text_input("Model Name:", value=default_model)
-        st.session_state["llm_model"] = selected_model
-
-        # Config Info
-        st.success(f"Active Provider: **{active_provider}**")
-        st.caption(f"Base URL: `{base_url or 'Default (OpenAI)'}`")
-        st.caption(f"Key Prefix: `{api_key[:6]}...`")
-
-    # --- Client Initialization ---
-    try:
-        if active_provider == "NVIDIA":
-            ai_client = openai.OpenAI(
-                api_key=api_key,
-                base_url=base_url
-            )
-        else:
-            ai_client = openai.OpenAI(api_key=api_key)
-
-        collection_name = "nvidia"
-    except Exception as e:
-        st.error(f"Failed to initialize AI Client: {e}")
+    
+    # Cerebras Configuration
+    api_key = os.getenv("CEREBRAS_API_KEY")
+    if not api_key:
+        st.error("❌ CEREBRAS_API_KEY is missing. Add it to .env or Streamlit secrets.")
         st.stop()
+
+    ai_client = openai.OpenAI(
+        api_key=api_key,
+        base_url="https://api.cerebras.ai/v1"
+    )
+    collection_name = "nvidia"
+    llm_model = "llama-3.3-70b"
+
 except Exception as e:
     st.error(f"Error initializing models or clients: {e}")
     st.stop()
 
 def search_knowledge_base(query_text):
     """Retrieves the best 3 chunks from Qdrant using Hybrid Search + ColBERT Reranking."""
-    # Convert query to math fingerprints
     query_dense = list(dense_model.embed([query_text]))[0].tolist()
     query_sparse = list(sparse_model.embed([query_text]))[0].as_object()
     query_colbert = list(colbert_model.embed([query_text]))[0].tolist()
 
-    # Multi-stage Search logic
     results = client.query_points(
         collection_name=collection_name,
         prefetch=[
@@ -134,17 +85,15 @@ def search_knowledge_base(query_text):
     return results
 
 def generate_answer(query, search_results):
-    """Feeds search results into OpenAI to get a human-like answer."""
-    # Build the 'Knowledge Context' block
+    """Feeds search results into the LLM to get a human-like answer."""
     context_text = ""
     for i, hit in enumerate(search_results.points):
         context_text += f"\n--- SOURCE {i+1}: {hit.payload['section_title']} ---\n"
         context_text += f"URL: {hit.payload.get('section_url', 'N/A')}\n"
         context_text += f"{hit.payload['chunk_text']}\n"
 
-    # The Prompt: Telling the AI how to behave
     response = ai_client.chat.completions.create(
-        model=st.session_state["llm_model"], 
+        model=llm_model, 
         messages=[
             {
                 "role": "system", 
@@ -166,12 +115,10 @@ for message in st.session_state.messages:
 
 # Chat Input
 if prompt := st.chat_input("What is the H100 GPU architecture?"):
-    # Add user message to state
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Generate Response
     with st.chat_message("assistant"):
         with st.spinner("Searching knowledge base..."):
             try:
@@ -180,14 +127,12 @@ if prompt := st.chat_input("What is the H100 GPU architecture?"):
                 
                 st.markdown(answer)
                 
-                # Show sources in an expander
                 with st.expander("📚 View Sources"):
                     for hit in sources.points:
                         st.markdown(f"**{hit.payload['section_title']}**")
                         st.markdown(f"_{hit.payload.get('section_url', '')}_")
                         st.caption(hit.payload['chunk_text'][:200] + "...")
 
-                # Add assistant message to state
                 st.session_state.messages.append({"role": "assistant", "content": answer})
                 
             except Exception as e:
