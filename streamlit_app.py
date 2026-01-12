@@ -1,0 +1,135 @@
+import streamlit as st
+import os
+import openai
+from dotenv import load_dotenv
+from qdrant_client import QdrantClient, models
+from fastembed import TextEmbedding, SparseTextEmbedding, LateInteractionTextEmbedding
+
+# Load environment variables
+load_dotenv()
+
+# Page Config
+st.set_page_config(
+    page_title="NVIDIA RAG Assistant",
+    page_icon="🤖",
+    layout="wide"
+)
+
+st.title("🤖 NVIDIA Technical Assistant")
+st.markdown("Ask questions about NVIDIA's corporate profile, hardware, and technical documentation.")
+
+# Initialize Session State
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# Cache resources to prevent reloading on every run
+@st.cache_resource
+def load_models():
+    st.write("🔍 Initializing AI Models...")
+    dense_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+    sparse_model = SparseTextEmbedding(model_name="prithivida/Splade_PP_en_v1")
+    colbert_model = LateInteractionTextEmbedding(model_name="colbert-ir/colbertv2.0")
+    return dense_model, sparse_model, colbert_model
+
+@st.cache_resource
+def get_qdrant_client():
+    return QdrantClient(
+        url=os.getenv("QDRANT_URL"), 
+        api_key=os.getenv("QDRANT_API_KEY"),
+        timeout=100
+    )
+
+try:
+    dense_model, sparse_model, colbert_model = load_models()
+    client = get_qdrant_client()
+    ai_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    collection_name = "nvidia"
+except Exception as e:
+    st.error(f"Error initializing models or clients: {e}")
+    st.stop()
+
+def search_knowledge_base(query_text):
+    """Retrieves the best 3 chunks from Qdrant using Hybrid Search + ColBERT Reranking."""
+    # Convert query to math fingerprints
+    query_dense = list(dense_model.embed([query_text]))[0].tolist()
+    query_sparse = list(sparse_model.embed([query_text]))[0].as_object()
+    query_colbert = list(colbert_model.embed([query_text]))[0].tolist()
+
+    # Multi-stage Search logic
+    results = client.query_points(
+        collection_name=collection_name,
+        prefetch=[
+            models.Prefetch(
+                prefetch=[
+                    models.Prefetch(query=query_dense, using="dense", limit=40),
+                    models.Prefetch(query=query_sparse, using="sparse", limit=40),
+                ],
+                query=models.FusionQuery(fusion=models.Fusion.RRF),
+                limit=40 
+            )
+        ],
+        query=query_colbert,
+        using="colbert",
+        limit=3
+    )
+    return results
+
+def generate_answer(query, search_results):
+    """Feeds search results into OpenAI to get a human-like answer."""
+    # Build the 'Knowledge Context' block
+    context_text = ""
+    for i, hit in enumerate(search_results.points):
+        context_text += f"\n--- SOURCE {i+1}: {hit.payload['section_title']} ---\n"
+        context_text += f"URL: {hit.payload.get('section_url', 'N/A')}\n"
+        context_text += f"{hit.payload['chunk_text']}\n"
+
+    # The Prompt: Telling the AI how to behave
+    response = ai_client.chat.completions.create(
+        model="gpt-4o", 
+        messages=[
+            {
+                "role": "system", 
+                "content": "You are a professional NVIDIA Technical Assistant. Answer questions accurately using ONLY the provided context. If the answer isn't in the context, say you don't know. Always cite your sources if possible."
+            },
+            {
+                "role": "user", 
+                "content": f"Context Information:\n{context_text}\n\nQuestion: {query}"
+            }
+        ],
+        temperature=0.1
+    )
+    return response.choices[0].message.content, search_results
+
+# Display Chat History
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+# Chat Input
+if prompt := st.chat_input("What is the H100 GPU architecture?"):
+    # Add user message to state
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    # Generate Response
+    with st.chat_message("assistant"):
+        with st.spinner("Searching knowledge base..."):
+            try:
+                search_hits = search_knowledge_base(prompt)
+                answer, sources = generate_answer(prompt, search_hits)
+                
+                st.markdown(answer)
+                
+                # Show sources in an expander
+                with st.expander("📚 View Sources"):
+                    for hit in sources.points:
+                        st.markdown(f"**{hit.payload['section_title']}**")
+                        st.markdown(f"_{hit.payload.get('section_url', '')}_")
+                        st.caption(hit.payload['chunk_text'][:200] + "...")
+
+                # Add assistant message to state
+                st.session_state.messages.append({"role": "assistant", "content": answer})
+                
+            except Exception as e:
+                st.error(f"An error occurred: {e}")
