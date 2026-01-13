@@ -88,22 +88,27 @@ except Exception as e:
     st.error(f"Error initializing models or clients: {e}")
     st.stop()
 
+@st.cache_data
 def search_knowledge_base(query_text):
+    # Bolt ⚡: Caching the search function to avoid re-running expensive embedding and search operations for the same query.
+    # This provides a significant speedup on repeated questions.
     """Retrieves the best 3 chunks from Qdrant using Hybrid Search + ColBERT Reranking."""
     query_dense = list(dense_model.embed([query_text]))[0].tolist()
     query_sparse = list(sparse_model.embed([query_text]))[0].as_object()
     query_colbert = list(colbert_model.embed([query_text]))[0].tolist()
 
+    # Bolt ⚡: Reduced the prefetch limit from 40 to 20. This speeds up the initial retrieval
+    # by fetching fewer candidates, reducing the workload for the expensive reranking step.
     results = client.query_points(
         collection_name=collection_name,
         prefetch=[
             models.Prefetch(
                 prefetch=[
-                    models.Prefetch(query=query_dense, using="dense", limit=40),
-                    models.Prefetch(query=query_sparse, using="sparse", limit=40),
+                    models.Prefetch(query=query_dense, using="dense", limit=20),
+                    models.Prefetch(query=query_sparse, using="sparse", limit=20),
                 ],
                 query=models.FusionQuery(fusion=models.Fusion.RRF),
-                limit=40 
+                limit=20
             )
         ],
         query=query_colbert,
