@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import time
 import openai
 from dotenv import load_dotenv
 from qdrant_client import QdrantClient, models
@@ -19,32 +20,44 @@ st.title("🤖 NVIDIA Technical Assistant")
 st.markdown("Ask questions about NVIDIA's corporate profile, hardware, and technical documentation.")
 
 # --- Sidebar: Knowledge Base Viewer ---
+@st.cache_data
+def get_manual_content():
+    # Bolt ⚡: Caching the manual file read. This prevents expensive I/O on every script run.
+    """Reads and caches the content of the NVIDIA manual."""
+    try:
+        with open("data/nvidia_manual.md", "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return None
+
 with st.sidebar:
     st.header("📖 Knowledge Base")
     st.caption("This is the document the AI uses to answer your questions.")
-    
-    # Load and display the manual
-    try:
-        with open("data/nvidia_manual.md", "r", encoding="utf-8") as f:
-            manual_content = f.read()
-        
+
+    # Bolt ⚡: Measuring the performance of the cached function.
+    # The first run will be slower as it reads from disk. Subsequent runs will be much faster.
+    start_time = time.perf_counter()
+    manual_content = get_manual_content()
+    end_time = time.perf_counter()
+    load_time = (end_time - start_time) * 1000  # Convert to milliseconds
+
+    if manual_content:
         with st.expander("📄 View NVIDIA Manual", expanded=False):
             st.markdown(manual_content)
-            
-        st.success(f"✅ Loaded {len(manual_content):,} characters")
-        
-        # Sample questions
-        st.markdown("---")
-        st.subheader("💡 Try asking:")
-        st.markdown("""
-        - *When was NVIDIA founded?*
-        - *What is the H100 GPU?*
-        - *Who is Jensen Huang?*
-        - *What is CUDA?*
-        - *How do I fix GPU overheating?*
-        """)
-    except FileNotFoundError:
+        st.success(f"✅ Loaded {len(manual_content):,} characters in {load_time:.2f} ms")
+    else:
         st.warning("Manual file not found locally (normal on Streamlit Cloud).")
+
+    # Sample questions
+    st.markdown("---")
+    st.subheader("💡 Try asking:")
+    st.markdown("""
+    - *When was NVIDIA founded?*
+    - *What is the H100 GPU?*
+    - *Who is Jensen Huang?*
+    - *What is CUDA?*
+    - *How do I fix GPU overheating?*
+    """)
 
 # Initialize Session State
 if "messages" not in st.session_state:
