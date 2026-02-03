@@ -121,7 +121,7 @@ def search_knowledge_base(query_text):
                     models.Prefetch(query=query_sparse, using="sparse", limit=20),
                 ],
                 query=models.FusionQuery(fusion=models.Fusion.RRF),
-                limit=20
+                limit=10  # Bolt ⚡: Reduced RRF limit to 10 to speed up ColBERT reranking
             )
         ],
         query=query_colbert,
@@ -130,13 +130,22 @@ def search_knowledge_base(query_text):
     )
     return results
 
-def generate_answer(query, search_results):
+@st.cache_data
+def generate_answer(query, _search_results):
+    # Bolt ⚡: Caching the LLM response to avoid redundant API calls for identical queries.
+    # The _search_results parameter is prefixed with an underscore to skip hashing
+    # the complex Qdrant object, as the result is already determined by the query.
     """Feeds search results into the LLM to get a human-like answer."""
-    context_text = ""
-    for i, hit in enumerate(search_results.points):
-        context_text += f"\n--- SOURCE {i+1}: {hit.payload['section_title']} ---\n"
-        context_text += f"URL: {hit.payload.get('section_url', 'N/A')}\n"
-        context_text += f"{hit.payload['chunk_text']}\n"
+    # Bolt ⚡: Efficiently join strings instead of repeated concatenation in a loop.
+    context_parts = []
+    for i, hit in enumerate(_search_results.points):
+        part = (
+            f"\n--- SOURCE {i+1}: {hit.payload['section_title']} ---\n"
+            f"URL: {hit.payload.get('section_url', 'N/A')}\n"
+            f"{hit.payload['chunk_text']}\n"
+        )
+        context_parts.append(part)
+    context_text = "".join(context_parts)
 
     response = ai_client.chat.completions.create(
         model=llm_model, 
@@ -152,7 +161,7 @@ def generate_answer(query, search_results):
         ],
         temperature=0.1
     )
-    return response.choices[0].message.content, search_results
+    return response.choices[0].message.content, _search_results
 
 # Display Chat History
 for message in st.session_state.messages:
@@ -168,10 +177,17 @@ if prompt := st.chat_input("What is the H100 GPU architecture?"):
     with st.chat_message("assistant"):
         with st.spinner("Searching knowledge base..."):
             try:
+                # Bolt ⚡: Measuring search and generation latency
+                start_search = time.perf_counter()
                 search_hits = search_knowledge_base(prompt)
+                search_time = (time.perf_counter() - start_search) * 1000
+
+                start_gen = time.perf_counter()
                 answer, sources = generate_answer(prompt, search_hits)
+                gen_time = (time.perf_counter() - start_gen) * 1000
                 
                 st.markdown(answer)
+                st.caption(f"⚡ Search: {search_time:.2f}ms | Generation: {gen_time:.2f}ms")
                 
                 with st.expander("📚 View Sources"):
                     for hit in sources.points:
