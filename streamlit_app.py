@@ -130,6 +130,7 @@ def search_knowledge_base(query_text):
     )
     return results
 
+@st.cache_data
 def generate_answer(query, search_results):
     """Feeds search results into the LLM to get a human-like answer."""
     context_text = ""
@@ -169,9 +170,16 @@ if prompt := st.chat_input("What is the H100 GPU architecture?"):
         with st.spinner("Searching knowledge base..."):
             try:
                 search_hits = search_knowledge_base(prompt)
+
+                # Bolt ⚡: Measuring the LLM generation time.
+                # Caching will make subsequent calls for the same query near-instant.
+                start_gen_time = time.perf_counter()
                 answer, sources = generate_answer(prompt, search_hits)
+                end_gen_time = time.perf_counter()
+                gen_duration = (end_gen_time - start_gen_time) * 1000
                 
                 st.markdown(answer)
+                st.info(f"💡 Answer generated in {gen_duration:.2f} ms")
                 
                 with st.expander("📚 View Sources"):
                     for hit in sources.points:
