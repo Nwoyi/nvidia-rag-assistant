@@ -101,7 +101,7 @@ except Exception as e:
     st.error(f"Error initializing models or clients: {e}")
     st.stop()
 
-@st.cache_data
+@st.cache_data(ttl=3600)
 def search_knowledge_base(query_text):
     # Bolt ⚡: Caching the search function to avoid re-running expensive embedding and search operations for the same query.
     # This provides a significant speedup on repeated questions.
@@ -130,14 +130,17 @@ def search_knowledge_base(query_text):
     )
     return results
 
-@st.cache_data
-def generate_answer(query, search_results):
+@st.cache_data(ttl=3600)
+def generate_answer(query, _search_results):
+    # Bolt ⚡: Optimization - Renamed search_results to _search_results to skip hashing.
+    # Also optimized context string construction using "".join() for better performance.
     """Feeds search results into the LLM to get a human-like answer."""
-    context_text = ""
-    for i, hit in enumerate(search_results.points):
-        context_text += f"\n--- SOURCE {i+1}: {hit.payload['section_title']} ---\n"
-        context_text += f"URL: {hit.payload.get('section_url', 'N/A')}\n"
-        context_text += f"{hit.payload['chunk_text']}\n"
+    context_parts = []
+    for i, hit in enumerate(_search_results.points):
+        context_parts.append(f"\n--- SOURCE {i+1}: {hit.payload['section_title']} ---\n")
+        context_parts.append(f"URL: {hit.payload.get('section_url', 'N/A')}\n")
+        context_parts.append(f"{hit.payload['chunk_text']}\n")
+    context_text = "".join(context_parts)
 
     response = ai_client.chat.completions.create(
         model=llm_model, 
@@ -153,7 +156,7 @@ def generate_answer(query, search_results):
         ],
         temperature=0.1
     )
-    return response.choices[0].message.content, search_results
+    return response.choices[0].message.content, _search_results
 
 # Display Chat History
 for message in st.session_state.messages:
