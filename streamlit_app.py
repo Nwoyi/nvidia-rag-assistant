@@ -80,6 +80,14 @@ def get_qdrant_client():
         timeout=100
     )
 
+@st.cache_resource
+def get_ai_client(api_key):
+    # Bolt ⚡: Caching the AI client initialization to avoid re-creating it on every script run.
+    return openai.OpenAI(
+        api_key=api_key,
+        base_url="https://api.cerebras.ai/v1"
+    )
+
 try:
     dense_model, sparse_model, colbert_model = load_models()
     client = get_qdrant_client()
@@ -90,10 +98,7 @@ try:
         st.error("❌ CEREBRAS_API_KEY is missing. Add it to .env or Streamlit secrets.")
         st.stop()
 
-    ai_client = openai.OpenAI(
-        api_key=api_key,
-        base_url="https://api.cerebras.ai/v1"
-    )
+    ai_client = get_ai_client(api_key)
     collection_name = "nvidia"
     llm_model = "llama-3.3-70b"
 
@@ -101,7 +106,7 @@ except Exception as e:
     st.error(f"Error initializing models or clients: {e}")
     st.stop()
 
-@st.cache_data
+@st.cache_data(ttl=3600)
 def search_knowledge_base(query_text):
     # Bolt ⚡: Caching the search function to avoid re-running expensive embedding and search operations for the same query.
     # This provides a significant speedup on repeated questions.
@@ -130,14 +135,20 @@ def search_knowledge_base(query_text):
     )
     return results
 
-@st.cache_data
-def generate_answer(query, search_results):
+@st.cache_data(ttl=3600)
+def generate_answer(query, _search_results):
+    # Bolt ⚡: Caching the answer generation with a TTL.
+    # Renamed search_results to _search_results to skip hashing of the complex Qdrant object,
+    # which provides a significant speedup in cache lookup.
     """Feeds search results into the LLM to get a human-like answer."""
-    context_text = ""
-    for i, hit in enumerate(search_results.points):
-        context_text += f"\n--- SOURCE {i+1}: {hit.payload['section_title']} ---\n"
-        context_text += f"URL: {hit.payload.get('section_url', 'N/A')}\n"
-        context_text += f"{hit.payload['chunk_text']}\n"
+    # Bolt ⚡: Using list join for context construction to avoid O(n^2) string concatenation performance penalty.
+    context_parts = []
+    for i, hit in enumerate(_search_results.points):
+        context_parts.append(f"\n--- SOURCE {i+1}: {hit.payload['section_title']} ---\n")
+        context_parts.append(f"URL: {hit.payload.get('section_url', 'N/A')}\n")
+        context_parts.append(f"{hit.payload['chunk_text']}\n")
+
+    context_text = "".join(context_parts)
 
     response = ai_client.chat.completions.create(
         model=llm_model, 
@@ -153,7 +164,8 @@ def generate_answer(query, search_results):
         ],
         temperature=0.1
     )
-    return response.choices[0].message.content, search_results
+    # Bolt ⚡: Returning only the answer string to minimize the cache memory footprint.
+    return response.choices[0].message.content
 
 # Display Chat History
 for message in st.session_state.messages:
@@ -174,7 +186,7 @@ if prompt := st.chat_input("What is the H100 GPU architecture?"):
                 # Bolt ⚡: Measuring the LLM generation time.
                 # Caching will make subsequent calls for the same query near-instant.
                 start_gen_time = time.perf_counter()
-                answer, sources = generate_answer(prompt, search_hits)
+                answer = generate_answer(prompt, search_hits)
                 end_gen_time = time.perf_counter()
                 gen_duration = (end_gen_time - start_gen_time) * 1000
                 
@@ -182,7 +194,8 @@ if prompt := st.chat_input("What is the H100 GPU architecture?"):
                 st.info(f"💡 Answer generated in {gen_duration:.2f} ms")
                 
                 with st.expander("📚 View Sources"):
-                    for hit in sources.points:
+                    # Bolt ⚡: Reusing the search_hits object directly to display sources.
+                    for hit in search_hits.points:
                         st.markdown(f"**{hit.payload['section_title']}**")
                         st.markdown(f"_{hit.payload.get('section_url', '')}_")
                         st.caption(hit.payload['chunk_text'][:200] + "...")
