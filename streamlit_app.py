@@ -80,7 +80,20 @@ def get_qdrant_client():
         timeout=100
     )
 
+@st.cache_resource
+def get_ai_client(api_key):
+    # Bolt ⚡: Caching the AI client initialization.
+    # This reduces the overhead of creating a new client object on every rerun.
+    return openai.OpenAI(
+        api_key=api_key,
+        base_url="https://api.cerebras.ai/v1"
+    )
+
 try:
+    # Bolt ⚡: Measuring the combined initialization time of models and clients.
+    # Caching these resources ensures that subsequent runs are near-instant.
+    start_init = time.perf_counter()
+
     dense_model, sparse_model, colbert_model = load_models()
     client = get_qdrant_client()
     
@@ -90,12 +103,16 @@ try:
         st.error("❌ CEREBRAS_API_KEY is missing. Add it to .env or Streamlit secrets.")
         st.stop()
 
-    ai_client = openai.OpenAI(
-        api_key=api_key,
-        base_url="https://api.cerebras.ai/v1"
-    )
+    ai_client = get_ai_client(api_key)
+
+    end_init = time.perf_counter()
+    init_duration = (end_init - start_init) * 1000
+
     collection_name = "nvidia"
     llm_model = "llama-3.3-70b"
+
+    with st.sidebar:
+        st.success(f"⚡ Resources ready in {init_duration:.2f} ms")
 
 except Exception as e:
     st.error(f"Error initializing models or clients: {e}")
@@ -131,10 +148,12 @@ def search_knowledge_base(query_text):
     return results
 
 @st.cache_data
-def generate_answer(query, search_results):
+def generate_answer(query, _search_results):
+    # Bolt ⚡: Used a leading underscore for _search_results to skip hashing.
+    # Qdrant's QueryResponse objects are complex and don't need to be hashed for caching.
     """Feeds search results into the LLM to get a human-like answer."""
     context_text = ""
-    for i, hit in enumerate(search_results.points):
+    for i, hit in enumerate(_search_results.points):
         context_text += f"\n--- SOURCE {i+1}: {hit.payload['section_title']} ---\n"
         context_text += f"URL: {hit.payload.get('section_url', 'N/A')}\n"
         context_text += f"{hit.payload['chunk_text']}\n"
@@ -153,7 +172,7 @@ def generate_answer(query, search_results):
         ],
         temperature=0.1
     )
-    return response.choices[0].message.content, search_results
+    return response.choices[0].message.content, _search_results
 
 # Display Chat History
 for message in st.session_state.messages:
